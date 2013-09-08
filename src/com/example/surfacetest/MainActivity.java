@@ -14,11 +14,9 @@ public class MainActivity extends Activity {
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
-		//setContentView(R.layout.activity_main);
-		
 		surface = new MySurface2(this);
 		renderer = new NativeRenderer(surface.getHolder());
-		renderer.test();
+
 		setContentView(surface);
 	}
 
@@ -27,6 +25,25 @@ public class MainActivity extends Activity {
 		// Inflate the menu; this adds items to the action bar if it is present.
 		getMenuInflater().inflate(R.menu.main, menu);
 		return true;
+	}
+	
+	@Override
+	public void onResume()
+	{
+		super.onResume();
+		//renderer.startRender();
+//		new Thread(new Runnable() {
+//			
+//			@Override
+//			public void run() {
+//				while(true)
+//				{
+//					renderer.drawNoise();
+//					//renderer.surfaceRender();
+//				}
+//				
+//			}
+//		}).start();
 	}
 	
 	@Override

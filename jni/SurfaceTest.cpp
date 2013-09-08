@@ -1,101 +1,125 @@
 #include <stdio.h>
 #include <string.h>
 #include <cstdlib>
+#include <pthread.h>
 #include <jni.h>
 #include <android/log.h>
 
 #include "com_example_surfacetest_Controller.h"
 
-#define WIDTH 200
-#define HEIGHT	200
+#define WIDTH 400
+#define HEIGHT	400
 
-static JNIEnv*	jniEnv = NULL;
 static jbyte* g_buffer = NULL;
 static uint8_t* pixelBuffer;
-static jobject javaObject = NULL;
-static jmethodID renderMethod = NULL;
+
+static JavaVM*	gJVM;
+static JNIEnv* gEnv;
+static jobject gJavaObject = NULL;
+static jmethodID gRenderCallback = NULL;
+
+static pthread_t	renderThread;
+static int			renderThreadId;
+static bool 		isAttached = false;
+static JNIEnv*		threadsJNIEnv;
 
 bool jni_surface_init(JNIEnv* env, jobject obj) {
-	__android_log_print(ANDROID_LOG_DEBUG, "native", "jni_surface_init, jobj is %d", obj);
-	jclass javaClass = env->GetObjectClass(obj);
-	//jclass javaClass = env->FindClass("com/example/surfacetest/NativeRenderer");
-	__android_log_print(ANDROID_LOG_DEBUG, "native", "jClass is %d", javaClass);
-
-
-	if(env->IsSameObject(javaClass, javaObject)) __android_log_print(ANDROID_LOG_DEBUG, "native", "javaClass == javaObject");
-	else __android_log_print(ANDROID_LOG_DEBUG, "native", "javaClass != javaObject");
-
-	jmethodID initMethod = env->GetMethodID(env->GetObjectClass(javaObject),"initSurface", "()Ljava/nio/ByteBuffer;");
-	__android_log_print(ANDROID_LOG_DEBUG, "native", "jmethod(init) is %d", initMethod);
-
-
-	jobject buf = env->CallObjectMethod(javaObject, initMethod);
-	if (buf == NULL) return false;
-	__android_log_print(ANDROID_LOG_DEBUG, "native", "buf is ok.");
-
-	g_buffer = (jbyte*)env->GetDirectBufferAddress(buf);
-	if (g_buffer == NULL) return false;
-	__android_log_print(ANDROID_LOG_DEBUG, "native", "g_buff is ok");
-
-	pixelBuffer = new uint8_t[WIDTH * HEIGHT * 2];
-
 	return JNI_VERSION_1_6;
+}
+
+void generateNoise()
+{
+	for(int i = 0 ; i < WIDTH * HEIGHT * 2 ; i++)
+	{
+		pixelBuffer[i] = (uint8_t)rand();
+	}
 }
 
 void jni_surface_release(JNIEnv* env) {
 
-	jclass javaClass = env->GetObjectClass(javaObject);
+	jclass javaClass = env->GetObjectClass(gJavaObject);
 	jmethodID releaseMethod = env->GetMethodID(javaClass,"surfaceRelease", "()V");
 
 	env->CallVoidMethod(javaClass, releaseMethod);
 	g_buffer = NULL;
+
+	if(pixelBuffer) delete[] pixelBuffer;
 }
+
 
 void jni_surface_render(JNIEnv* env, uint8_t* pixels, int w, int h) {
-	__android_log_print(ANDROID_LOG_DEBUG, "native", "jni_surface_render");
 	if (g_buffer == NULL) return;
-
-	jclass javaClass = env->GetObjectClass(javaObject);
-	renderMethod = env->GetMethodID(javaClass,"surfaceRender", "()V");
-
 	memcpy(g_buffer, pixels, w * h * 2); // RGB565 pixels
-	env->CallVoidMethod(javaClass, renderMethod);
+	env->CallVoidMethod(gJavaObject, gRenderCallback);
 }
 
+void* renderFrame(void* attributes)
+{
+	__android_log_print(ANDROID_LOG_DEBUG, "native", "renderFrame");
+	if(!isAttached)
+	{
+		__android_log_print(ANDROID_LOG_DEBUG, "native", "renderFrame: attaching thread.");
+		gJVM->AttachCurrentThread(&threadsJNIEnv, NULL);
+		__android_log_print(ANDROID_LOG_DEBUG, "native", "renderFrame: attaching thread - Attached.");
+		isAttached = true;
+	}
+
+	while(true)
+	{
+		generateNoise();
+		__android_log_print(ANDROID_LOG_DEBUG, "native", "renderFrame: noise generated.");
+		jni_surface_render(threadsJNIEnv, pixelBuffer, WIDTH, HEIGHT);
+	}
+
+
+	gJVM->DetachCurrentThread();
+}
 
 JNIEXPORT void JNICALL Java_com_example_surfacetest_NativeRenderer_test(
                   JNIEnv* env,
                   jobject thiz)
 {
 	__android_log_print(ANDROID_LOG_DEBUG, "native", "Hello JNI. jobj is %d", thiz);
-	jniEnv = env;
+	env->GetJavaVM(&gJVM);
 
-	if(javaObject == NULL)
-	{
-		jclass	cls = env->GetObjectClass(thiz);
-		if(cls == NULL) return;
+	gEnv = env;
+	gJavaObject = env->NewGlobalRef(thiz);
 
-		javaObject = env->NewGlobalRef(cls);
-		if(javaObject == NULL) return;
+	jclass objectsClass = env->GetObjectClass(thiz);
+	__android_log_print(ANDROID_LOG_DEBUG, "native", "test: objectsClass = %d", objectsClass);
 
-		bool res = env->IsSameObject(cls, javaObject);
+	jmethodID callback = env->GetMethodID(objectsClass,"initSurface", "()Ljava/nio/ByteBuffer;");
+	__android_log_print(ANDROID_LOG_DEBUG, "native", "test: callback = %d", callback);
 
-		if(res) __android_log_print(ANDROID_LOG_DEBUG, "native", "cls == javaObject");
-		else __android_log_print(ANDROID_LOG_DEBUG, "native", "cls != javaObject");
-	}
+	gRenderCallback = env->GetMethodID(objectsClass, "surfaceRender", "()V");
+	__android_log_print(ANDROID_LOG_DEBUG, "native", "test: gRenderCallback = %d", gRenderCallback);
 
-	__android_log_print(ANDROID_LOG_DEBUG, "native", "Env:%d, javaObject(gRef):%d", *jniEnv, javaObject);
+	jobject buff = env->CallObjectMethod(thiz,callback);
+	__android_log_print(ANDROID_LOG_DEBUG, "native", "test: buff = %d", buff);
 
-	jni_surface_init(env, thiz);
+	g_buffer = (jbyte*)env->GetDirectBufferAddress(buff);
+	//if (g_buffer == NULL) return false;
+	__android_log_print(ANDROID_LOG_DEBUG, "native", "g_buff = %d", g_buffer);
+
+	pixelBuffer = new uint8_t[WIDTH * HEIGHT * 2];
+
+
 }
+
+
+JNIEXPORT void JNICALL Java_com_example_surfacetest_NativeRenderer_startRender(
+                  JNIEnv* env,
+                  jobject thiz)
+{
+	renderThreadId = pthread_create(&renderThread, NULL, renderFrame, NULL);
+	__android_log_print(ANDROID_LOG_DEBUG, "native", "renderThread = %d", renderThread);
+	pthread_join(renderThread, NULL);
+}
+
 
 JNIEXPORT void JNICALL Java_com_example_surfacetest_NativeRenderer_drawNoise(JNIEnv* env, jobject thiz)
 {
-	__android_log_print(ANDROID_LOG_DEBUG, "native", "Draw noise");
-	for(int i = 0 ; i < WIDTH * HEIGHT * 2 ; i++)
-	{
-		pixelBuffer[i] = (uint8_t)rand();
-		jni_surface_render(env, pixelBuffer, WIDTH, HEIGHT);
-	}
+	generateNoise();
+	jni_surface_render(env, pixelBuffer, WIDTH, HEIGHT);
 }
 
